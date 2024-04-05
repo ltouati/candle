@@ -125,6 +125,9 @@ impl ToUsize2 for (usize, usize) {
 pub trait Module {
     fn forward(&self, xs: &Tensor) -> Result<Tensor>;
 }
+pub trait AttentionModule {
+    fn forward(&self, xs: &Tensor,attention_mask: &Option<Tensor>) -> Result<Tensor>;
+}
 
 impl<T: Fn(&Tensor) -> Result<Tensor>> Module for T {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
