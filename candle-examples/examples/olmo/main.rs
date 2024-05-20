@@ -5,10 +5,9 @@ extern crate intel_mkl_src;
 extern crate accelerate_src;
 
 use anyhow::{Error as E, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
-use candle_transformers::models::qwen2::{Config as ConfigBase, ModelForCausalLM as ModelBase};
-use candle_transformers::models::qwen2_moe::{Config as ConfigMoe, Model as ModelMoe};
+use candle_transformers::models::olmo::{Config, Model as OLMo};
 
 use candle::{DType, Device, Tensor};
 use candle_examples::token_output_stream::TokenOutputStream;
@@ -18,17 +17,7 @@ use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
 enum Model {
-    Base(ModelBase),
-    Moe(ModelMoe),
-}
-
-impl Model {
-    fn forward(&mut self, xs: &Tensor, s: usize) -> candle::Result<Tensor> {
-        match self {
-            Self::Moe(ref mut m) => m.forward(xs, s),
-            Self::Base(ref mut m) => m.forward(xs, s),
-        }
-    }
+    OLMo(OLMo),
 }
 
 struct TextGeneration {
@@ -69,7 +58,7 @@ impl TextGeneration {
         let mut tokens = self
             .tokenizer
             .tokenizer()
-            .encode(prompt, true)
+            .encode(prompt, false)
             .map_err(E::msg)?
             .get_ids()
             .to_vec();
@@ -91,7 +80,9 @@ impl TextGeneration {
             let start_pos = tokens.len().saturating_sub(context_size);
             let ctxt = &tokens[start_pos..];
             let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, start_pos)?;
+            let logits = match &mut self.model {
+                Model::OLMo(m) => m.forward(&input, start_pos)?,
+            };
             let logits = logits.squeeze(0)?.squeeze(0)?.to_dtype(DType::F32)?;
             let logits = if self.repeat_penalty == 1. {
                 logits
@@ -128,22 +119,16 @@ impl TextGeneration {
     }
 }
 
-#[derive(Clone, Copy, Debug, clap::ValueEnum, PartialEq, Eq)]
-enum WhichModel {
-    #[value(name = "0.5b")]
-    W0_5b,
-    #[value(name = "1.8b")]
-    W1_8b,
-    #[value(name = "4b")]
-    W4b,
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum Which {
+    #[value(name = "1b")]
+    W1b,
     #[value(name = "7b")]
     W7b,
-    #[value(name = "14b")]
-    W14b,
-    #[value(name = "72b")]
-    W72b,
-    #[value(name = "moe-a2.7b")]
-    MoeA27b,
+    #[value(name = "7b-twin-2t")]
+    W7bTwin2T,
+    #[value(name = "1.7-7b")]
+    V1_7W7b,
 }
 
 #[derive(Parser, Debug)]
@@ -156,9 +141,6 @@ struct Args {
     /// Enable tracing (generates a trace-timestamp.json file).
     #[arg(long)]
     tracing: bool,
-
-    #[arg(long)]
-    use_flash_attn: bool,
 
     #[arg(long)]
     prompt: String,
@@ -176,7 +158,7 @@ struct Args {
     seed: u64,
 
     /// The length of the sample to generate (in tokens).
-    #[arg(long, short = 'n', default_value_t = 10000)]
+    #[arg(long, short = 'n', default_value_t = 1000)]
     sample_len: usize,
 
     #[arg(long)]
@@ -184,6 +166,9 @@ struct Args {
 
     #[arg(long, default_value = "main")]
     revision: String,
+
+    #[arg(long, default_value = "1b")]
+    model: Which,
 
     #[arg(long)]
     tokenizer_file: Option<String>,
@@ -198,9 +183,6 @@ struct Args {
     /// The context size to consider for the repeat penalty.
     #[arg(long, default_value_t = 64)]
     repeat_last_n: usize,
-
-    #[arg(long, default_value = "0.5b")]
-    model: WhichModel,
 }
 
 fn main() -> Result<()> {
@@ -233,19 +215,14 @@ fn main() -> Result<()> {
     let api = Api::new()?;
     let model_id = match args.model_id {
         Some(model_id) => model_id,
-        None => {
-            let size = match args.model {
-                WhichModel::W0_5b => "0.5B",
-                WhichModel::W1_8b => "1.8B",
-                WhichModel::W4b => "4B",
-                WhichModel::W7b => "7B",
-                WhichModel::W14b => "14B",
-                WhichModel::W72b => "72B",
-                WhichModel::MoeA27b => "MoE-A2.7B",
-            };
-            format!("Qwen/Qwen1.5-{size}")
-        }
+        None => match args.model {
+            Which::W1b => "allenai/OLMo-1B-hf".to_string(),
+            Which::W7b => "allenai/OLMo-7B-hf".to_string(),
+            Which::W7bTwin2T => "allenai/OLMo-7B-Twin-2T-hf".to_string(),
+            Which::V1_7W7b => "allenai/OLMo-1.7-7B-hf".to_string(),
+        },
     };
+
     let repo = api.repo(Repo::with_revision(
         model_id,
         RepoType::Model,
@@ -261,37 +238,33 @@ fn main() -> Result<()> {
             .map(std::path::PathBuf::from)
             .collect::<Vec<_>>(),
         None => match args.model {
-            WhichModel::W0_5b | WhichModel::W1_8b => vec![repo.get("model.safetensors")?],
-            WhichModel::W4b
-            | WhichModel::W7b
-            | WhichModel::W14b
-            | WhichModel::W72b
-            | WhichModel::MoeA27b => {
-                candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?
+            Which::W1b => {
+                vec![repo.get("model.safetensors")?]
             }
+            _ => candle_examples::hub_load_safetensors(&repo, "model.safetensors.index.json")?,
         },
     };
+
     println!("retrieved the files in {:?}", start.elapsed());
     let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(E::msg)?;
 
     let start = std::time::Instant::now();
-    let config_file = repo.get("config.json")?;
-    let device = candle_examples::device(args.cpu)?;
-    let dtype = if device.is_cuda() {
-        DType::BF16
-    } else {
-        DType::F32
+    let config = {
+        let config_filename = repo.get("config.json")?;
+        let config: Config = serde_json::from_slice(&std::fs::read(config_filename)?)?;
+        config
     };
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
-    let model = match args.model {
-        WhichModel::MoeA27b => {
-            let config: ConfigMoe = serde_json::from_slice(&std::fs::read(config_file)?)?;
-            Model::Moe(ModelMoe::new(&config, vb)?)
-        }
-        _ => {
-            let config: ConfigBase = serde_json::from_slice(&std::fs::read(config_file)?)?;
-            Model::Base(ModelBase::new(&config, vb)?)
-        }
+
+    let device = candle_examples::device(args.cpu)?;
+    let model = {
+        let dtype = if device.is_cuda() {
+            DType::BF16
+        } else {
+            DType::F32
+        };
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&filenames, dtype, &device)? };
+        let model = OLMo::new(&config, vb)?;
+        Model::OLMo(model)
     };
 
     println!("loaded the model in {:?}", start.elapsed());

@@ -66,7 +66,8 @@ We also provide a some command line based examples using state of the art models
 - [Gemma](./candle-examples/examples/gemma/): 2b and 7b general LLMs from Google Deepmind.
 - [RecurrentGemma](./candle-examples/examples/recurrent-gemma/): 2b and 7b
   Griffin based models from Google that mix attention with a RNN like state.
-- [Phi-1, Phi-1.5, and Phi-2](./candle-examples/examples/phi/): 1.3b and 2.7b general LLMs with performance on par with LLaMA-v2 7b.
+- [Phi-1, Phi-1.5, Phi-2, and Phi-3](./candle-examples/examples/phi/): 1.3b,
+  2.7b, and 3.8b general LLMs with performance on par with 7b models.
 - [StableLM-3B-4E1T](./candle-examples/examples/stable-lm/): a 3b general LLM
   pre-trained on 1T tokens of English and code datasets. Also supports
   StableLM-2, a 1.6b LLM trained on 2T tokens, as well as the code variants.
@@ -111,7 +112,7 @@ We also provide a some command line based examples using state of the art models
 
 <img src="https://github.com/huggingface/candle/raw/main/candle-examples/examples/segment-anything/assets/sam_merged.jpg" width="200">
 
-- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmantation model.
+- [SegFormer](./candle-examples/examples/segformer/): transformer based semantic segmentation model.
 - [Whisper](./candle-examples/examples/whisper/): speech recognition model.
 - [EnCodec](./candle-examples/examples/encodec/): high-quality audio compression
   model using residual vector quantization.
@@ -203,7 +204,7 @@ If you have an addition to this list, please submit a pull request.
         - LLaMA v1, v2, and v3 with variants such as SOLAR-10.7B.
         - Falcon.
         - StarCoder, StarCoder2.
-        - Phi 1, 1.5, and 2.
+        - Phi 1, 1.5, 2, and 3.
         - Mamba, Minimal Mamba
         - Gemma 2b and 7b.
         - Mistral 7b v0.1.
@@ -407,3 +408,10 @@ This may be caused by the models being loaded from `/mnt/c`, more details on
 
 You can set `RUST_BACKTRACE=1` to be provided with backtraces when a candle
 error is generated.
+
+#### CudaRC error
+
+If you encounter an error like this one `called `Result::unwrap()` on an `Err` value: LoadLibraryExW { source: Os { code: 126, kind: Uncategorized, message: "The specified module could not be found." } }` on windows. To fix copy and rename these 3 files (make sure they are in path). The paths depend on your cuda version.
+`c:\Windows\System32\nvcuda.dll` -> `cuda.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\cublas64_12.dll` -> `cublas.dll`
+`c:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin\curand64_10.dll` -> `curand.dll`
